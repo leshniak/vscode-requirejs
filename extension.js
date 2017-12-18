@@ -1,14 +1,69 @@
 const vscode = require('vscode');
 const path = require('path');
+const fs = require('fs');
+const globby = require('globby');
+const promiseLimit = require('promise-limit');
+
+const wait = ms => (...args) => new Promise(resolve => setTimeout(resolve, ms, ...args));
 
 class ReferenceProvider {
+	constructor () {
+		const config = vscode.workspace.getConfiguration('requireModuleSupport');
+
+		this.modulePaths = new Map();
+
+		if (config.get('scanFilesOnStart')) {
+			this.scanFiles();
+		}
+	}
+
+	scanFiles () {
+		const config = vscode.workspace.getConfiguration('requireModuleSupport');
+		const cwd = path.resolve(vscode.workspace.rootPath, config.get('modulePath'));
+		const limit = promiseLimit(1);
+
+		this.modulePaths.clear();
+
+		return globby(config.get('scanIncludes'), {
+				cwd,
+				absolute: true,
+				nodir: true,
+				nosort: true
+			})
+			.then(paths => paths.map(path => vscode.Uri.file(path)))
+			.then(uris => uris.map(
+				uri => limit(() => this.mapFile(uri).then(wait(20)))
+			));
+	}
+
+	mapFile (uri) {
+		const moduleName = /define\s*\(['"](.*)['"]\s*,/i;
+
+		return vscode.workspace.openTextDocument(uri).then(doc => {
+			const fullText = doc.getText();
+			const commentRanges = this.findComments(fullText);
+			const statements = this.getRequireOrDefineStatements(fullText);
+
+			statements.forEach(({contents, start}) => {
+				const statement = contents.match(moduleName);
+				const name = statement && statement[1];
+
+				if (!this.checkIfCommentedOut(commentRanges, start) && name) {
+					this.modulePaths.set(name, uri);
+				}
+			});
+
+			return doc;
+		});
+	}
+
 	/**
 	 * Return array containing object with start index of require/define and result
 	 * @param {String} str String to process
 	 * @returns {Array} containing objects
 	 */
 	getRequireOrDefineStatements (str) {
-		let match = /^[ \t]*(define|require)\s*\(([^)]*)/mgi;
+		let match = /^[ \t]*(define|require)\s*\(([^\]]*[^)]*)/mgi;
 
 		let list = [];
 		let searchResult;
@@ -41,8 +96,9 @@ class ReferenceProvider {
 		let list, result;
 		const array = /\[[^\]]*\]/gi;
 		const params = /function\s*\([^)]*/gi;
+		const optional = /require\.optional\(([^)]*)\)/gi;
 
-		let m = array.exec(str);
+		let m = array.exec(str.replace(optional, '$1'));
 
 		if (m) {
 			list = JSON.parse(m[0].split('\'').join('"'));
@@ -133,6 +189,7 @@ class ReferenceProvider {
 		 * @returns {Promise} resolves with file location
 		 */
 	searchModule (currentFilePath, modulePath, searchFor, stopSearchingFurther) {
+		const mappedPath = this.modulePaths.get(modulePath);
 		let newUriPath;
 
 		if ((modulePath.match(/^\./i))) {
@@ -146,9 +203,13 @@ class ReferenceProvider {
 			newUriPath += '.js';
 		}
 
+		if (!fs.existsSync(newUriPath) && mappedPath) {
+			newUriPath = mappedPath.path;
+		}
+
 		const newUri = vscode.Uri.file(newUriPath);
 		const newDocument = vscode.workspace.openTextDocument(newUri);
-
+	
 		return new Promise(resolve => {
 			newDocument.then(doc => {
 				const newFullText = doc.getText();
@@ -452,10 +513,18 @@ ReferenceProvider.childWord = '';
 Object.assign(exports, {
 	ReferenceProvider,
 	activate (context) {
+		const provider = new ReferenceProvider();
+
 		context.subscriptions.push(
 			vscode.languages.registerDefinitionProvider(
 				'javascript',
-				new ReferenceProvider()
+				provider
+			)
+		);
+		context.subscriptions.push(
+			vscode.commands.registerCommand(
+				'vscode-requirejs.scanFiles',
+				() => provider.scanFiles()
 			)
 		);
 	}

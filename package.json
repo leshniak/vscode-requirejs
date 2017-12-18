@@ -16,6 +16,21 @@
 	],
 	"main": "./extension",
 	"contributes": {
+		"commands": [
+			{
+				"command": "vscode-requirejs.scanFiles",
+				"title": "Scan files",
+				"category": "RequireJS"
+			}
+		],
+		"menus": {
+			"commandPalette": [
+				{
+					"command": "vscode-requirejs.scanFiles",
+					"when": "editorLangId == javascript"
+				}
+			]
+		},
 		"configuration": {
 			"type": "object",
 			"title": "Require Module Support",
@@ -29,6 +44,18 @@
 					"type": "boolean",
 					"default": false,
 					"description": "Should we search inside the landing file?"
+				},
+				"requireModuleSupport.scanFilesOnStart": {
+					"type": "boolean",
+					"default": false,
+					"description": "Should scan files on start"
+				},
+				"requireModuleSupport.scanIncludes": {
+					"type": "array",
+					"default": [
+						"**/*.js"
+					],
+					"description": "Include these files on scan"
 				}
 			}
 		}
@@ -53,5 +80,9 @@
 		"sinon": "^3.0.0",
 		"typescript": "^2.4.2",
 		"vscode": "^1.0.0"
+	},
+	"dependencies": {
+		"globby": "^7.1.1",
+		"promise-limit": "^2.5.0"
 	}
 }
